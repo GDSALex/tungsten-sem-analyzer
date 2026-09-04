@@ -1,0 +1,35 @@
+# Data and trained weights are not tracked
+data/images/
+data/masks/
+checkpoints/
+*.pth
+*.pt
+
+# Outputs
+inference_results/
+inference_*_results/
+validation_results/
+search_snapshots/
+*.png
+*.csv
+!docs/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Notebooks
+.ipynb_checkpoints/

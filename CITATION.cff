@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: TungstenAnalyzer
+message: >-
+  If you use this software, please cite both the software and the
+  accompanying paper.
+type: software
+authors:
+  - given-names: Alejandro
+    family-names: Orbañanos Fernández
+    affiliation: Universidad Autónoma de Madrid
+  - given-names: Giuseppe A.
+    family-names: Rattá Gutiérrez
+    affiliation: Laboratorio Nacional de Fusión, CIEMAT
+  - given-names: Daniel
+    family-names: Alegre
+    affiliation: Laboratorio Nacional de Fusión, CIEMAT
+repository-code: 'https://github.com/USER/tungsten-sem-analyzer'
+abstract: >-
+  Automated detection and quantification of crack networks and
+  crater-like damage in scanning electron microscopy images of
+  tungsten plasma-facing components exposed to high heat flux
+  transients at the OLMAT facility of CIEMAT.
+keywords:
+  - scanning electron microscopy
+  - image segmentation
+  - tungsten
+  - plasma-facing components
+  - nuclear fusion
+license: MIT
+version: 1.0.0

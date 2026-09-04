@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tungsten-sem-analyzer"
+version = "1.0.0"
+description = "Automated quantification of high heat flux damage in tungsten SEM micrographs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Alejandro Orbañanos Fernández" },
+    { name = "Giuseppe A. Rattá" },
+    { name = "Daniel Alegre" },
+]
+keywords = [
+    "scanning electron microscopy",
+    "image segmentation",
+    "tungsten",
+    "plasma-facing components",
+    "nuclear fusion",
+    "U-Net",
+]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.23",
+    "opencv-python>=4.7",
+    "scipy>=1.9",
+    "scikit-image>=0.20",
+    "Pillow>=9.4",
+    "matplotlib>=3.6",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "segmentation-models-pytorch>=0.3.3",
+    "albumentations>=1.3",
+    "optuna>=3.1",
+    "pytesseract>=0.3.10",
+    "tqdm>=4.65",
+]
+
+[project.urls]
+Repository = "https://github.com/USER/tungsten-sem-analyzer"
+
+[project.scripts]
+tungsten-analyze = "tungsten_analyzer.classical_pipeline:main"
+tungsten-train = "tungsten_analyzer.train:main"
+tungsten-infer = "tungsten_analyzer.inference:main"
+
+[tool.setuptools]
+packages = ["tungsten_analyzer"]
