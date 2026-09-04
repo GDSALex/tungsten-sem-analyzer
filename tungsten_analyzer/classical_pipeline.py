@@ -272,9 +272,9 @@ def compute_zones_dynamic(roi_gray, bottom_pct=0.05):
         peak_edge = None
         # Walk the peaks from the bottom up, to take the one closest to the material
         for pico in reversed(picos_candidatos):
-            # Survival condition: ten pixels below the jump the texture must still
-            # be high, which is what distinguishes tungsten from a stray line in the
-            # background.
+            # Survival condition: ten pixels below the jump the texture must still be
+            # high, which is what distinguishes tungsten from a stray line in the background.
+            if pico + 10 < len(texture_smooth) and texture_smooth[pico + 10] > umbral_material:
                 peak_edge = pico
                 break
                 
