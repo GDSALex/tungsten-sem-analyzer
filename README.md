@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
-[![syntax check](https://github.com/GITHUB_USER/tungsten-sem-analyzer/actions/workflows/syntax-check.yml/badge.svg)](https://github.com/GITHUB_USER/tungsten-sem-analyzer/actions/workflows/syntax-check.yml)
+[![syntax check](https://github.com/GDSALex/tungsten-sem-analyzer/actions/workflows/syntax-check.yml/badge.svg)](https://github.com/GDSALex/tungsten-sem-analyzer/actions/workflows/syntax-check.yml)
 
 Automated detection and quantification of high heat flux damage in scanning electron
 microscopy images of tungsten, developed for post-exposure analysis of the samples
@@ -73,7 +73,7 @@ Python 3.9 or newer, and a CUDA-capable GPU if you intend to train. Inference an
 evaluation run on CPU, more slowly.
 
 ```bash
-git clone https://github.com/GITHUB_USER/tungsten-sem-analyzer.git
+git clone https://github.com/GDSALex/tungsten-sem-analyzer.git
 cd tungsten-sem-analyzer
 python -m venv .venv && source .venv/bin/activate     # .venv\Scripts\activate on Windows
 pip install -e .

@@ -14,7 +14,7 @@ authors:
   - given-names: Daniel
     family-names: Alegre
     affiliation: Laboratorio Nacional de Fusión, CIEMAT
-repository-code: 'https://github.com/GITHUB_USER/tungsten-sem-analyzer'
+repository-code: 'https://github.com/GDSALex/tungsten-sem-analyzer'
 abstract: >-
   Automated detection and quantification of crack networks and
   crater-like damage in scanning electron microscopy images of
