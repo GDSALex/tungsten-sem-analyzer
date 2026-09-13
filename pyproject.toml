@@ -46,7 +46,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/USER/tungsten-sem-analyzer"
+Repository = "https://github.com/GITHUB_USER/tungsten-sem-analyzer"
+Documentation = "https://github.com/GITHUB_USER/tungsten-sem-analyzer/blob/main/docs/reproducing_the_paper.md"
 
 [project.scripts]
 tungsten-analyze = "tungsten_analyzer.classical_pipeline:main"

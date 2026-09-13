@@ -1,6 +1,6 @@
 """
 =============================================================================
-UNET_FULL_INFERENCE.PY  —  Complete Inference Pipeline
+inference.py  —  Complete inference pipeline
 =============================================================================
 Combines U-Net segmentation with classical post-processing to produce
 publication-ready analysis of tungsten SEM images.
@@ -14,10 +14,10 @@ PIPELINE:
   6. Figures: original vs segmentation, GT comparison, detailed report
 
 USAGE:
-  python unet_full_inference.py                           # Interactive mode
-  python unet_full_inference.py --input image.jpg         # Single image
-  python unet_full_inference.py --input ./folder --batch  # Batch mode
-  python unet_full_inference.py --input image.jpg --gt mask.json  # With GT comparison
+  python -m tungsten_analyzer.inference                           # Interactive mode
+  python -m tungsten_analyzer.inference --input image.jpg         # Single image
+  python -m tungsten_analyzer.inference --input ./folder --batch  # Batch mode
+  python -m tungsten_analyzer.inference --input image.jpg --gt mask.json  # With GT comparison
 
 OUTPUT (per image):
   - {name}_segmentation.png    : Original vs U-Net segmentation
@@ -77,7 +77,7 @@ _CRACK_LABELS  = {'crack', 'grieta', 'fracture', 'fractura',
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CLASSICAL INFRASTRUCTURE (from Tungsten_Analyzer.py)
+#  CLASSICAL INFRASTRUCTURE (mirrors classical_pipeline.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def detect_meta_strip(gray):
@@ -97,7 +97,10 @@ def auto_scale(gray, meta_h):
         import pytesseract
         from PIL import Image
         import re
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        from tungsten_analyzer.classical_pipeline import _locate_tesseract
+        _tess = _locate_tesseract()
+        if _tess:
+            pytesseract.pytesseract.tesseract_cmd = _tess
         strip = gray[-meta_h:, :]
         _, thresh = cv2.threshold(strip, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         thresh = cv2.bitwise_not(thresh)

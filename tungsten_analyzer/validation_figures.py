@@ -1,6 +1,6 @@
 """
 =============================================================================
-UNET_VALIDATE_VISUAL.PY  —  Visual Validation of U-Net Predictions
+validation_figures.py  —  Visual validation of U-Net predictions
 =============================================================================
 Generates side-by-side comparison images showing:
   - Original SEM image
@@ -9,10 +9,10 @@ Generates side-by-side comparison images showing:
   - Overlay comparison (TP=green, FP=red, FN=blue)
 
 Usage:
-  python unet_validate_visual.py
-  python unet_validate_visual.py --checkpoint checkpoints/best_model.pth
-  python unet_validate_visual.py --data-dir ./data --num-images 10
-  python unet_validate_visual.py --output-dir ./validation_results
+  python -m tungsten_analyzer.validation_figures
+  python -m tungsten_analyzer.validation_figures --checkpoint checkpoints/best_model.pth
+  python -m tungsten_analyzer.validation_figures --data-dir ./data --num-images 10
+  python -m tungsten_analyzer.validation_figures --output-dir ./validation_results
 =============================================================================
 """
 
@@ -35,7 +35,7 @@ import matplotlib.patches as mpatches
 from tungsten_analyzer.model import build_unet
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  MASK LOADING (same logic as unet_dataset.py)
+#  MASK LOADING (same logic as dataset.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 CRATER_LABELS = {'crater', 'cratera', 'cráter', 'vaporization',
@@ -65,7 +65,7 @@ def load_masks_from_json(json_path: Path, h: int, w: int,
     draw_crater   = ImageDraw.Draw(canvas_crater)
     draw_crack    = ImageDraw.Draw(canvas_crack)
 
-    # Adaptive crack line width — must match unet_dataset.py
+    # Adaptive crack line width — must match dataset.py
     base_width = 15
     CRACK_LINE_WIDTH = max(7, int(base_width * max(img_w, img_h) / 1024))
 

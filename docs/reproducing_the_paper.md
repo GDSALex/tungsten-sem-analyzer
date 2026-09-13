@@ -7,8 +7,9 @@ dataset sits under `./data` as described in `data/README.md`.
 Two things are worth knowing before starting.
 
 The trained weights are not in the repository, since GitHub is a poor home for a
-300 MB checkpoint. Obtain `best_model.pth` from the archived release and place it
-under `checkpoints/`.
+300 MB checkpoint. `best_model.pth` is available from the corresponding author on
+reasonable request, together with the annotated dataset (see `data/README.md`);
+place it under `checkpoints/`.
 
 Everything reported in the paper comes from the checkpoint of epoch 125, selected on
 the validation subset. The train and held-out subsets are recovered by replaying the

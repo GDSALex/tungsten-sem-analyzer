@@ -2,7 +2,7 @@ cff-version: 1.2.0
 title: TungstenAnalyzer
 message: >-
   If you use this software, please cite both the software and the
-  accompanying paper.
+  accompanying paper (see preferred-citation).
 type: software
 authors:
   - given-names: Alejandro
@@ -14,7 +14,7 @@ authors:
   - given-names: Daniel
     family-names: Alegre
     affiliation: Laboratorio Nacional de Fusión, CIEMAT
-repository-code: 'https://github.com/USER/tungsten-sem-analyzer'
+repository-code: 'https://github.com/GITHUB_USER/tungsten-sem-analyzer'
 abstract: >-
   Automated detection and quantification of crack networks and
   crater-like damage in scanning electron microscopy images of
@@ -28,3 +28,47 @@ keywords:
   - nuclear fusion
 license: MIT
 version: 1.0.0
+preferred-citation:
+  type: article
+  title: >-
+    A first deep learning framework for the post-exposure quantification
+    of high heat flux damage in tungsten at OLMAT
+  journal: Annals of Nuclear Energy
+  year: 2026
+  status: submitted
+  authors:
+    - given-names: Alejandro
+      family-names: Orbañanos Fernández
+      affiliation: Universidad Autónoma de Madrid
+    - given-names: Giuseppe A.
+      family-names: Rattá Gutiérrez
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: Daniel
+      family-names: Alegre
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: Ignacio
+      family-names: Rivera
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: Pablo
+      family-names: Fernández-Mayo
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: David
+      family-names: Tafalla
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: Alonso
+      family-names: de Castro
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: Laura
+      family-names: Serrador
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - given-names: Renaud
+      family-names: Dejarnac
+      affiliation: Institute of Plasma Physics of the CAS
+    - given-names: Jiri
+      family-names: Matejicek
+      affiliation: Institute of Plasma Physics of the CAS
+    - given-names: Eider
+      family-names: Oyarzábal
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
+    - name: the OLMAT Team
+      affiliation: Laboratorio Nacional de Fusión, CIEMAT
