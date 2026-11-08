@@ -1,0 +1,24 @@
+name: syntax check
+
+# Lightweight check that every module and script still parses on the supported
+# Python versions. The full pipeline needs a GPU and the dataset, so it is not
+# exercised here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Byte-compile package and scripts
+        run: python -m compileall -q tungsten_analyzer scripts

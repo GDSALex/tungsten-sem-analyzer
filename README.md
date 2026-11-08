@@ -1,12 +1,17 @@
 # TungstenAnalyzer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](pyproject.toml)
+[![syntax check](https://github.com/GDSALex/tungsten-sem-analyzer/actions/workflows/syntax-check.yml/badge.svg)](https://github.com/GDSALex/tungsten-sem-analyzer/actions/workflows/syntax-check.yml)
+
 Automated detection and quantification of high heat flux damage in scanning electron
 microscopy images of tungsten, developed for post-exposure analysis of the samples
 irradiated at the [OLMAT](https://www.ciemat.es) facility of CIEMAT.
 
 This repository holds the code behind the paper *A first deep learning framework for
-the post-exposure quantification of high heat flux damage in tungsten at OLMAT*, and
-it is complete enough to reproduce the results reported there from the annotated
+the post-exposure quantification of high heat flux damage in tungsten at OLMAT*
+(Orbañanos Fernández et al., submitted to *Annals of Nuclear Energy*, 2026), and it
+is complete enough to reproduce the results reported there from the annotated
 dataset and the trained weights.
 
 ---
@@ -111,15 +116,16 @@ Python 3.9 or newer, and a CUDA-capable GPU if you intend to train. Inference an
 evaluation run on CPU, more slowly.
 
 ```bash
-git clone https://github.com/<user>/tungsten-sem-analyzer.git
+git clone https://github.com/GDSALex/tungsten-sem-analyzer.git
 cd tungsten-sem-analyzer
 python -m venv .venv && source .venv/bin/activate     # .venv\Scripts\activate on Windows
 pip install -e .
 ```
 
 Reading the scale from the metadata bar needs the Tesseract OCR binary installed on
-the system, not only the `pytesseract` wrapper. Without it, pass the scale explicitly
-with `--scale`.
+the system, not only the `pytesseract` wrapper. The binary is looked up in the
+`TESSERACT_CMD` environment variable, then on the `PATH`, then at the default Windows
+install location. Without it, pass the scale explicitly with `--scale`.
 
 ---
 
@@ -216,10 +222,24 @@ separately.
 
 ---
 
+## Trained weights and data
+
+The trained checkpoint (`best_model.pth`, about 300 MB), the LabelMe annotation files
+and the SEM micrographs are not redistributed here. They are available from the
+corresponding author on reasonable request, subject to the data policy of the OLMAT
+facility. See `data/README.md` for the expected layout once you have them.
+
 ## Citation
 
-If this code is useful in your work, please cite the paper. `CITATION.cff` holds the
-machine-readable entry; GitHub renders it in the sidebar.
+If this code is useful in your work, please cite the paper:
+
+> A. Orbañanos Fernández, G. A. Rattá Gutiérrez, D. Alegre, I. Rivera,
+> P. Fernández-Mayo, D. Tafalla, A. de Castro, L. Serrador, R. Dejarnac,
+> J. Matejicek, E. Oyarzábal and the OLMAT Team, *A first deep learning framework for
+> the post-exposure quantification of high heat flux damage in tungsten at OLMAT*,
+> submitted to Annals of Nuclear Energy (2026).
+
+`CITATION.cff` holds the machine-readable entry; GitHub renders it in the sidebar.
 
 ## Licence
 

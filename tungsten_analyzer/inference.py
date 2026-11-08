@@ -1,6 +1,6 @@
 """
 =============================================================================
-UNET_FULL_INFERENCE.PY  —  Complete Inference Pipeline
+inference.py  —  Complete inference pipeline
 =============================================================================
 Combines U-Net segmentation with classical post-processing to produce
 publication-ready analysis of tungsten SEM images.
@@ -79,7 +79,7 @@ _CRACK_LABELS  = {'crack', 'grieta', 'fracture', 'fractura',
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CLASSICAL INFRASTRUCTURE (from Tungsten_Analyzer.py)
+#  CLASSICAL INFRASTRUCTURE (mirrors classical_pipeline.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def detect_meta_strip(gray):

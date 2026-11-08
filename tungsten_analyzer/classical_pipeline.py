@@ -167,6 +167,21 @@ def detect_meta_strip(gray):
     return int(h * 0.10)
 
 
+def _locate_tesseract():
+    """
+    Find the Tesseract binary: the TESSERACT_CMD environment variable first, then
+    the PATH, then the default Windows install location. Returns None when nothing
+    is found, in which case pytesseract is left with its own default.
+    """
+    import os
+    import shutil
+    cmd = os.environ.get('TESSERACT_CMD') or shutil.which('tesseract')
+    if cmd:
+        return cmd
+    win_default = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    return win_default if os.path.isfile(win_default) else None
+
+
 def auto_scale(gray, meta_h):
     """
     Read the magnification, or the physical width, from the SEM metadata bar
@@ -178,7 +193,9 @@ def auto_scale(gray, meta_h):
         import re
         import cv2
 
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        _tess = _locate_tesseract()
+        if _tess:
+            pytesseract.pytesseract.tesseract_cmd = _tess
 
         strip = gray[-meta_h:, :]
         
