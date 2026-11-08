@@ -1,5 +1,14 @@
 """Reproduce Table 1 of the paper.
 
+REVISION 1 NOTE.  This script reproduces Table 1 of the first version of the
+manuscript, which is superseded.  Those figures are in-sample (the network had been
+trained or selected on every image), and the crack figure is the legacy score of that
+version, which is not an IoU.  With the default thresholds (0.5 / 0.30) the script
+returns the printed values; the text of the first version stated a crack threshold of
+0.25 (use --thr-crack 0.25).  The out-of-fold evaluation of the revised manuscript
+(edge-grouped cross-validation, strict crater IoU and length-weighted crack
+centreline scores) is produced by the evaluation code archived with the revision.
+
 The script runs both methods over the annotated dataset, scores them with the single
 protocol of :mod:`tungsten_analyzer.metrics`, and prints the medians and means for
 the whole annotated set and for the training and held-out subsets separately.
@@ -110,6 +119,12 @@ def main() -> None:
                         help="input size of the global forward pass")
     parser.add_argument("--strip-fraction", type=float, default=M.METADATA_STRIP_FRACTION,
                         help="fraction of the frame height occupied by the SEM metadata bar")
+    parser.add_argument("--thr-crater", type=float, default=0.5,
+                        help="threshold of the crater channel (default 0.5)")
+    parser.add_argument("--thr-crack", type=float, default=0.30,
+                        help="threshold of the crack channel.  The default 0.30 reproduces the "
+                             "figures printed in the first version; the text of that version "
+                             "stated 0.25")
     parser.add_argument("--skip-classical", action="store_true",
                         help="evaluate only the network")
     parser.add_argument("--save", default=None,
@@ -141,16 +156,20 @@ def main() -> None:
         gt_crater, gt_crack = M.load_annotation(json_path, h, w,
                                                 full_height=full_h, full_width=full_w)
 
-        pred_crater, pred_crack, _, _ = predict_image(model, roi, device, args.img_size)
+        pred_crater, pred_crack, _, _ = predict_image(model, roi, device, args.img_size,
+                                                      threshold_crater=args.thr_crater,
+                                                      threshold_crack=args.thr_crack)
         record = M.score_image(gt_crater, gt_crack, pred_crater, pred_crack)
         record["name"] = Path(name).stem
         record["held_out"] = name in held_out
         unet_records.append(record)
 
         if not args.skip_classical:
-            from tungsten_analyzer.classical_pipeline import auto_scale, detect_meta_strip
-            meta_h = detect_meta_strip(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
-            um = auto_scale(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), meta_h) or 0.224
+            from tungsten_analyzer.measurement import read_scale
+            um = read_scale(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))["um_per_px"]
+            if um is None:      # no default pixel size any more (revision 1)
+                print(f"  {name}: pixel size not verified, classical pipeline skipped")
+                continue
             c_crater, c_crack = classical_prediction(roi, um)
             rec = M.score_image(gt_crater, gt_crack, c_crater, c_crack)
             rec["name"] = Path(name).stem

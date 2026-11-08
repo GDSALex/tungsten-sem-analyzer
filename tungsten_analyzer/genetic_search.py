@@ -98,6 +98,9 @@ def cargar_dataset(ruta_dataset):
             # Running the OCR once per image and caching the result is what makes
             # the search affordable, since every trial revisits the same images.
             # If the OCR fails we fall back to 0.2236 um/px, the value for 500x.
+            # (Revision 1: this fallback is kept only so that the search can be
+            # reproduced as it was run; the analysis tools no longer use a default
+            # pixel size, see measurement.read_scale.)
             um_px = tsa.auto_scale(img_gray, meta_h)
             if um_px is None:
                 um_px = 0.2236 

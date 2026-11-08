@@ -95,7 +95,12 @@ def generate_masks_from_classic(
             # Escala
             scale = scale_override or um_per_px
             if scale is None:
-                scale = auto_scale(img_gray, meta_h) or 0.224
+                # Revision 1: verified pixel size or nothing (no default value)
+                from tungsten_analyzer.measurement import read_scale
+                scale = read_scale(img_gray)["um_per_px"]
+                if scale is None:
+                    print(f"    pixel size not verified, image skipped (use --scale)")
+                    continue
 
             # Zonas
             edge_end, artifact_start = compute_zones_dynamic(roi_gray)

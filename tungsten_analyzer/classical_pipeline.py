@@ -27,9 +27,13 @@ black-hat transform, and binarised by dual hysteresis, permissive on sound mater
 and strict inside craters where ablation roughness would otherwise be read as a
 tangle of false cracks. A topological filter then removes short isolated fragments.
 
-Finally each crater is graded on a five-level severity scale and each crack is
-classified as edge-connected or internal, with a regularity metric computed from the
-coefficient of variation of the inter-crack spacing.
+Finally each crater is assigned one of five size classes of its equivalent diameter and
+each crack is classified as edge-connected or internal, with a regularity metric
+computed from the coefficient of variation of the inter-crack spacing.  (Revision 1:
+the size classes were called severity grades in the first version; they are size
+classes only, not calibrated against any physical endpoint.  The pixel size is now
+accepted only when the magnification and the field width of the data bar agree, or
+when it is given with --scale; there is no default value any more.)
 
 The forty parameters in ``CFG`` are the configuration found by the evolutionary
 search of :mod:`tungsten_analyzer.genetic_search`, and they are the ones behind
@@ -89,12 +93,15 @@ from skimage.morphology import remove_small_objects
 warnings.filterwarnings('ignore')
 
 
+# Neutral size classes of the equivalent diameter (revision 1).  The first version
+# labelled them from "No structural damage" to "Catastrophic damage"; they were never
+# calibrated against depth, material loss or any other physical endpoint.
 CRATER_GRADES = {
-    0: (0,     0,    "No structural damage"),
-    1: (1,     100,  "Micro thermal damage (< 100 um)"),
-    2: (100,   600,  "Melting and crumbling (100 to 600 um)"),
-    3: (600,   950,  "Vaporisation crater (600 to 950 um)"),
-    4: (950, 99999,  "Catastrophic damage (> 950 um)"),
+    0: (0,     0,    "no retained region"),
+    1: (1,     100,  "size class 1 (< 100 um)"),
+    2: (100,   600,  "size class 2 (100 to 600 um)"),
+    3: (600,   950,  "size class 3 (600 to 950 um)"),
+    4: (950, 99999,  "size class 4 (> 950 um)"),
 }
 
 # ── Colores BGR para overlay ────────────────────────────────────────────────
@@ -874,7 +881,7 @@ def build_overlay(img_bgr, h_roi, crack_mask, crack_skel, crack_labels,
         cntrs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(overlay, cntrs, -1, col, 2)
         cy, cx = cd['centroid']
-        cv2.putText(overlay, f"G{cd['grade']}",
+        cv2.putText(overlay, f"S{cd['grade']}",
                     (int(cx) + 5, int(cy) - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, col, 2)
 
@@ -943,7 +950,7 @@ def save_figure(img_bgr, overlay, crack_info, max_grade, crater_details,
         f"  ({'YES' if ci['regular_crack_class'] else 'NO'}){cv_str}\n"
         f"  Longitud total: {ci['total_length_um']:.0f} µm\n\n"
         "CRATERS\n"
-        f"  Maximum grade: {max_grade}  =  {gd}\n"
+        f"  Largest size class: {max_grade}  =  {gd}\n"
         f"  Craters detected: {len(crater_details)}"
     )
     fig.text(0.5, 0.01, txt, ha='center', va='bottom',
@@ -1029,13 +1036,16 @@ def analyze(img_path, um_per_px=None,
         print(f"  Barra metadatos: {meta_h} px")
 
     # ── Escala ───────────────────────────────────────────────────────
+    # Revision 1: the pixel size is accepted only when the magnification and the field
+    # width of the data bar agree within 1 % (measurement.read_scale), or when it is given
+    # with --scale.  The silent default of 0.224 um/px of the first version is removed.
     if um_per_px is None:
-        um_per_px = auto_scale(img_gray, meta_h)
-    if um_per_px is None:
-        # Valor por defecto para 500X OLMAT (1024px × 0.224 µm/px ≈ 229 µm)
-        um_per_px = 0.224
-        print(f"  [scale] Auto-detection failed. Using {um_per_px} um/px (500X).")
-        print("          Pass --scale for a more reliable value.")
+        from tungsten_analyzer import measurement as MS
+        res = MS.read_scale(img_gray)
+        um_per_px = res['um_per_px']
+        if um_per_px is None:
+            raise ValueError(f"{img_path.name}: pixel size not verified ({res['reason']}); "
+                             f"pass it with --scale")
     if verbose:
         print(f"  Escala: {um_per_px:.4f} µm/px  "
               f"({W * um_per_px:.0f} × {H * um_per_px:.0f} µm)")
@@ -1072,7 +1082,7 @@ def analyze(img_path, um_per_px=None,
         gd = CRATER_GRADES.get(max_grade, (0, 0, ''))[2]
         print(f"    Valid: {len(crater_details)}  "
             f"Artefactos filtrados: {len(artifacts)}")
-        print(f"    Maximum grade: {max_grade} = {gd}")
+        print(f"    Largest size class: {max_grade} = {gd}")
 
     # ── Cracks, once the craters are known ───────────────────────────
     if verbose:
@@ -1149,7 +1159,7 @@ def analyze(img_path, um_per_px=None,
         print(f"  Small cracks     : class {ci['small_crack_class']} "
               f"(n={ci['n_small']})")
         print(f"  Regulares        : clase {ci['regular_crack_class']}")
-        print(f"  Largest crater   : grade {max_grade} = {gd}")
+        print(f"  Largest crater   : {gd}")
         print(f"{'─'*62}")
 
     return {

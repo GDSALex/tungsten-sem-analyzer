@@ -5,24 +5,32 @@ UNET_FULL_INFERENCE.PY  —  Complete Inference Pipeline
 Combines U-Net segmentation with classical post-processing to produce
 publication-ready analysis of tungsten SEM images.
 
-PIPELINE:
-  1. Load image + auto-scale (OCR from SEM metadata bar)
-  2. U-Net prediction (craters + cracks)
-  3. Post-processing: skeletonization, artifact filtering, zone detection
-  4. Classification: crater grades (0-4), crack types (large/small/regular)
-  5. Metrics: areas, lengths, diameters in µm
-  6. Figures: original vs segmentation, GT comparison, detailed report
+PIPELINE (revision 1 of the manuscript):
+  1. Load image; region of interest = frame without its bottom 8 % of rows (the crop
+     used in training), further restricted to the rows above the SEM data bar
+  2. Scale: pixel size read from the data bar and accepted only when the printed
+     magnification and field width agree within 1 % (or given with --scale); otherwise
+     every physical output is withheld and the image is flagged
+  3. U-Net prediction (craters + cracks), unchanged deployed pipeline
+  4. Analysis stage: crater like regions (areas, equivalent diameters, neutral size
+     category of the largest one) and cracks (revised centreline, Kulpa length,
+     edge connected / near edge / internal, spacing CV)
+  5. Figures: original vs segmentation (edge row drawn), comparison with a manual
+     annotation when one is available
+  The size categories are size classes of the largest crater like region only.  They
+  are not calibrated against depth, material loss or any other physical endpoint.
 
 USAGE:
-  python unet_full_inference.py                           # Interactive mode
-  python unet_full_inference.py --input image.jpg         # Single image
-  python unet_full_inference.py --input ./folder --batch  # Batch mode
-  python unet_full_inference.py --input image.jpg --gt mask.json  # With GT comparison
+  python -m tungsten_analyzer.inference                                # Interactive mode
+  python -m tungsten_analyzer.inference --input image.jpg              # Single image
+  python -m tungsten_analyzer.inference --input ./folder --batch       # Batch mode
+  python -m tungsten_analyzer.inference --input image.jpg --gt mask.json   # With annotation
+  python -m tungsten_analyzer.inference --input image.jpg --scale 0.2236   # Pixel size given
 
 OUTPUT (per image):
   - {name}_segmentation.png    : Original vs U-Net segmentation
-  - {name}_gt_comparison.png   : GT vs prediction (if JSON provided)
-  - {name}_report.json         : Full quantitative report
+  - {name}_gt_comparison.png   : annotation vs prediction (if a JSON is provided)
+  - {name}_report.json         : Full quantitative report, with the pixel size and its source
   - summary.csv                : Batch summary (batch mode only)
 =============================================================================
 """
@@ -47,24 +55,18 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 from tungsten_analyzer.model import build_unet, build_unet_deep_supervised
+from tungsten_analyzer import measurement as MS
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-CRATER_GRADES = {
-    0: (0,     0,    "No structural damage"),
-    1: (1,     100,  "Micro thermal damage (< 100 µm)"),
-    2: (100,   600,  "Melting and crumbling (100–600 µm)"),
-    3: (600,   950,  "Vaporization crater (600–950 µm)"),
-    4: (950, 99999,  "Catastrophic damage (> 950 µm)"),
-}
+# Neutral size categories of the largest crater like region (equivalent diameter).
+# The first version called them severity grades, with labels from "no structural damage"
+# to "catastrophic damage"; they were never calibrated against any physical endpoint.
+SIZE_CATEGORIES = MS.SIZE_CATEGORIES
 
-CRACK_CLASSES = {
-    'large': {0: 'None', 1: '< 1000 µm', 2: '≥ 1000 µm'},
-    'small': {0: 'None', 1: '1–2 cracks', 2: '> 2 cracks'},
-    'regular': {0: 'No', 1: 'Yes (CV < 45%)'},
-}
+STRIP_FRACTION = 0.08      # bottom rows removed in training and inference
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -81,6 +83,12 @@ _CRACK_LABELS  = {'crack', 'grieta', 'fracture', 'fractura',
 # ─────────────────────────────────────────────────────────────────────────────
 
 def detect_meta_strip(gray):
+    """Height of the data bar found by the detector of the first version.
+
+    Kept for reference only: it removes 76 rows on the OLMAT images, whereas training
+    removed 61 (8 %).  The revised analysis uses the training crop and
+    `measurement.locate_data_bar` instead.
+    """
     h = gray.shape[0]
     for frac in (0.15, 0.12, 0.10, 0.08):
         s = int(h * frac)
@@ -92,38 +100,39 @@ def detect_meta_strip(gray):
     return int(h * 0.10)
 
 
-def auto_scale(gray, meta_h):
+def _configure_tesseract():
+    """Use the default Windows install path when tesseract is not on the PATH."""
     try:
+        import shutil
         import pytesseract
-        from PIL import Image
-        import re
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        strip = gray[-meta_h:, :]
-        _, thresh = cv2.threshold(strip, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        thresh = cv2.bitwise_not(thresh)
-        h_s, w_s = thresh.shape
-        thresh = cv2.resize(thresh, (w_s * 3, h_s * 3), interpolation=cv2.INTER_CUBIC)
-        pil = Image.fromarray(thresh)
-        text = pytesseract.image_to_string(pil, config='--psm 6').replace('\n', ' ')
-        w_px = gray.shape[1]
-        m_mag = re.search(r'[Mm]ag\s*[=:]?\s*(\d+)', text)
-        if m_mag:
-            mag_val = float(m_mag.group(1))
-            sc = 111.8 / mag_val if mag_val > 0 else None
-            if sc:
-                print(f"  [OCR] Magnification: {mag_val:.0f}x -> {sc:.4f} µm/px")
-                return sc
-        for pat, mult in [(r'[Ww]idth\s*[=:]\s*([\d.]+)\s*mm', 1000.0),
-                          (r'[Ww]idth\s*[=:]\s*([\d.]+)\s*[µu]m', 1.0)]:
-            m = re.search(pat, text)
-            if m:
-                um = float(m.group(1)) * mult
-                sc = um / w_px
-                print(f"  [OCR] Physical width: {um:.1f} µm -> {sc:.4f} µm/px")
-                return sc
-    except Exception as e:
-        print(f"  [OCR] Tesseract failed: {e}")
-    return None
+        default = Path(r'C:\Program Files\Tesseract-OCR\tesseract.exe')
+        if shutil.which('tesseract') is None and default.exists():
+            pytesseract.pytesseract.tesseract_cmd = str(default)
+    except ImportError:
+        pass
+
+
+def read_scale(gray_full):
+    """Verified pixel size of a full frame (dict from `measurement.read_scale`).
+
+    The first version read only the integer part of the magnification (``1.50 kX`` was
+    read as 1x), converted it with a constant of 111.8 um and, when nothing was read,
+    fell back silently on 0.224 um/px.  The pixel size is now accepted only when the
+    printed magnification and field width agree within 1 %.
+    """
+    _configure_tesseract()
+    return MS.read_scale(gray_full)
+
+
+def auto_scale(gray, meta_h=None):
+    """Verified pixel size in um/px, or None (never a default value).
+
+    Kept with its old signature for the scripts that call it; `meta_h` is ignored.
+    """
+    res = read_scale(gray)
+    if res['um_per_px'] is None:
+        print(f"  [Scale] not verified: {res['reason']}")
+    return res['um_per_px']
 
 
 def compute_zones_dynamic(roi_gray, bottom_pct=0.02):
@@ -486,8 +495,15 @@ def _bridge_crack_gaps(crack_mask, max_gap=15):
 
     This applies directional closing at multiple angles (0°, 45°, 90°, 135°)
     to reconnect fragments that are nearly collinear within `max_gap` pixels.
-    Only pixels that bridge between two existing crack regions are kept,
-    avoiding spurious expansion.
+
+    Note (revision 1): every pixel added by the closings is accepted.  No check is made
+    that a new pixel joins two existing crack regions, as the first version of this
+    docstring stated, so the closing can also fill concavities and thicken single
+    fragments.  On the out-of-fold predictions the bridged pixels add about 5 % of the
+    centreline length, and only about 3 % of that added length lies within 5 px of an
+    annotated crack (Section S5.4 of the supplementary material of the revised
+    manuscript).  The behaviour is kept unchanged so that the deployed pipeline is the
+    one evaluated in the paper.
     """
     if not crack_mask.any():
         return crack_mask
@@ -505,8 +521,7 @@ def _bridge_crack_gaps(crack_mask, max_gap=15):
         # to the original mask on both sides along the SE direction.
         new_pixels = (closed > 0) & ~result
         if new_pixels.any():
-            # Verify bridging: dilate original mask slightly and check
-            # that new pixels are within reach of existing crack on both ends
+            # All new pixels are accepted (no bridging check, see the docstring)
             result = result | new_pixels
 
     # Remove any small isolated dots introduced by bridging
@@ -537,7 +552,12 @@ def _oriented_line_se(length, angle_deg):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyze_craters(crater_mask, roi_gray, um_per_px, edge_end, artifact_start):
-    """Analyze crater mask: label, measure, classify, filter artifacts."""
+    """Crater like regions: label, filter, measure.
+
+    Returns (details, size category of the largest region, label image).  The region
+    filters are those of the first version.  With `um_per_px=None` (scale not verified)
+    only pixel measurements are returned and the size category is None.
+    """
     # Remove small noise
     clean = remove_small_objects(crater_mask, min_size=300)
     
@@ -561,39 +581,55 @@ def analyze_craters(crater_mask, roi_gray, um_per_px, edge_end, artifact_start):
             if area_px < 600:
                 continue
 
-        diam_px = getattr(pp, 'equivalent_diameter_area',
-                          getattr(pp, 'equivalent_diameter', 0.0))
-        diam_um = float(diam_px) * um_per_px
-        area_um2 = area_px * (um_per_px ** 2)
-        perimeter_um = pp.perimeter * um_per_px
-
-        # Grade assignment
-        if diam_um < 1:      grade = 0
-        elif diam_um < 100:  grade = 1
-        elif diam_um < 600:  grade = 2
-        elif diam_um < 950:  grade = 3
-        else:                grade = 4
-
+        diam_px = float(getattr(pp, 'equivalent_diameter_area',
+                                getattr(pp, 'equivalent_diameter', 0.0)))
+        scaled = um_per_px is not None
         details.append({
             'label': pp.label,
             'area_px': area_px,
-            'area_um2': round(area_um2, 1),
-            'diam_um': round(diam_um, 1),
-            'perimeter_um': round(perimeter_um, 1),
+            'diam_px': round(diam_px, 1),
+            'area_um2': round(area_px * um_per_px ** 2, 1) if scaled else None,
+            'diam_um': round(diam_px * um_per_px, 1) if scaled else None,
+            'perimeter_um': round(pp.perimeter * um_per_px, 1) if scaled else None,
             'centroid': (float(pp.centroid[0]), float(pp.centroid[1])),
             'bbox': tuple(int(v) for v in pp.bbox),
             'eccentricity': round(float(pp.eccentricity), 3),
             'solidity': round(float(pp.solidity), 3),
-            'grade': grade,
-            'grade_desc': CRATER_GRADES[grade][2],
         })
 
-    max_grade = max((d['grade'] for d in details), default=0)
-    return details, max_grade, labels
+    if um_per_px is None:
+        return details, None, labels
+    largest = max((d['diam_um'] for d in details), default=None)
+    return details, MS.size_category(largest), labels
 
 
 def analyze_cracks(crack_mask, um_per_px, edge_end):
-    """Skeletonize crack mask and compute per-crack metrics."""
+    """Revised crack analysis (see `measurement.analyze_cracks`).
+
+    Returns (crack_info, centreline skeleton, label image of the kept cracks).  The
+    length of each crack is the Kulpa length of its pruned centreline, which replaces
+    the skeleton pixel count of the first version (`analyze_cracks_submitted`).
+    """
+    from scipy import ndimage as ndi
+    info = MS.analyze_cracks(crack_mask.astype(bool), um_per_px, edge_end)
+    skel = info.pop('skeleton')
+    labels, _ = ndi.label(skel, structure=np.ones((3, 3), int))
+    return info, skel, labels
+
+
+_CRACK_CLASSES_SUBMITTED = {
+    'large': {0: 'None', 1: '< 1000 µm', 2: '≥ 1000 µm'},
+    'small': {0: 'None', 1: '1–2 cracks', 2: '> 2 cracks'},
+    'regular': {0: 'No', 1: 'Yes (CV < 45%)'},
+}
+
+
+def analyze_cracks_submitted(crack_mask, um_per_px, edge_end):
+    """Crack analysis of the first version (skeleton pixel count), kept for reference.
+
+    Its length estimate depends on the width of the mask: applied to the 15-px bands of
+    the annotation it returns about twice the annotated length.
+    """
     # Skeletonize
     skel = skeletonize(crack_mask.astype(bool))
     skel_labels = ski_label(skel)
@@ -678,12 +714,12 @@ def analyze_cracks(crack_mask, um_per_px, edge_end):
 
     crack_info = {
         'large_crack_class': large_cls,
-        'large_crack_class_desc': CRACK_CLASSES['large'][large_cls],
+        'large_crack_class_desc': _CRACK_CLASSES_SUBMITTED['large'][large_cls],
         'large_crack_max_um': round(large_max_um, 1),
         'small_crack_class': small_cls,
-        'small_crack_class_desc': CRACK_CLASSES['small'][small_cls],
+        'small_crack_class_desc': _CRACK_CLASSES_SUBMITTED['small'][small_cls],
         'regular_crack_class': regular_cls,
-        'regular_crack_class_desc': CRACK_CLASSES['regular'][regular_cls],
+        'regular_crack_class_desc': _CRACK_CLASSES_SUBMITTED['regular'][regular_cls],
         'regular_cv': regular_cv,
         'n_total': len(all_cracks),
         'n_large': len(large_list),
@@ -773,8 +809,16 @@ C_CRACK_VIS  = (0, 0, 210)     # Red BGR
 C_SKEL_VIS   = (0, 200, 200)   # Teal BGR
 
 
-def build_segmentation_overlay(img_gray, crater_mask, crack_skel,
-                                crater_details, edge_end):
+C_CRACK_LABEL_VIS = {'edge connected': (0, 0, 210),      # red (BGR)
+                     'near edge': (210, 0, 210),         # magenta
+                     'internal': (0, 210, 230)}          # yellow
+C_EDGE_ROW_VIS = (255, 200, 0)                           # cyan
+
+
+def build_segmentation_overlay(img_gray, crater_mask, crack_labels, crack_info, edge_end,
+                               crater_details=()):
+    """Retained crater like regions (orange, numbered), cracks coloured by label and the
+    edge row found by the scanner (dashed cyan line)."""
     overlay = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
     alpha = 0.35
 
@@ -782,28 +826,37 @@ def build_segmentation_overlay(img_gray, crater_mask, crack_skel,
     col_layer = np.zeros_like(overlay)
     col_layer[crater_mask] = C_CRATER_VIS
     overlay = cv2.addWeighted(overlay, 1 - alpha, col_layer, alpha, 0)
-    
-    # Crater contours + labels
+
+    # Crater contours + region numbers
     mask_u8 = crater_mask.astype(np.uint8) * 255
     contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cv2.drawContours(overlay, contours, -1, C_CRATER_VIS, 2)
-    
-    for cd in crater_details:
+    for i, cd in enumerate(crater_details, start=1):
         cy, cx = cd['centroid']
-        cv2.putText(overlay, f"G{cd['grade']}",
-                    (int(cx)+5, int(cy)-5),
+        cv2.putText(overlay, str(i), (int(cx) + 5, int(cy) - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, C_CRATER_VIS, 2)
-    
-    # Crack skeleton
-    for r, c in np.argwhere(crack_skel):
-        cv2.circle(overlay, (c, r), 1, C_CRACK_VIS, -1)
-    
+
+    # Crack centrelines, coloured by label (crack k is label k of crack_labels)
+    for crack in crack_info['individual_cracks']:
+        colour = C_CRACK_LABEL_VIS.get(crack['label'], C_CRACK_VIS)
+        for r, c in np.argwhere(crack_labels == crack['id']):
+            cv2.circle(overlay, (int(c), int(r)), 1, colour, -1)
+
+    # Edge row (dashed)
+    if edge_end > 0:
+        W = overlay.shape[1]
+        for x0 in range(0, W, 16):
+            cv2.line(overlay, (x0, int(edge_end)), (min(x0 + 9, W - 1), int(edge_end)),
+                     C_EDGE_ROW_VIS, 1)
     return overlay
 
 
 def fig_original_vs_segmentation(img_gray, overlay, crater_details, crack_info,
-                                  max_grade, um_per_px, edge_end, out_path):
-    """Publication-ready figure: Original SEM | Segmentation overlay."""
+                                  size_cat, scale, edge_end, out_path):
+    """Original SEM | segmentation overlay, with the measurements below.
+
+    `scale` is the dict returned by `resolve_scale`; when the pixel size is not verified
+    only pixel measurements are shown."""
     from matplotlib import gridspec
 
     plt.rcParams.update({'font.family': 'serif', 'font.size': 18})
@@ -836,9 +889,14 @@ def fig_original_vs_segmentation(img_gray, overlay, crater_details, crack_info,
     ax_seg.set_title('U-Net Segmentation', color='black',
                      fontsize=34, fontweight='bold', pad=12)
 
+    from matplotlib.lines import Line2D
     leg = [
-        mpatches.Patch(color=(0.9, 0.63, 0.0), label=f'Craters ({len(crater_details)})'),
-        mpatches.Patch(color=(0.82, 0.0, 0.0),  label=f'Cracks ({crack_info["n_total"]})'),
+        mpatches.Patch(color=(0.9, 0.63, 0.0), label=f'Crater like regions ({len(crater_details)})'),
+        mpatches.Patch(color=(0.82, 0.0, 0.0), label=f'Edge connected cracks ({crack_info["n_edge_connected"]})'),
+        mpatches.Patch(color=(0.82, 0.0, 0.82), label=f'Near edge cracks ({crack_info["n_near_edge"]})'),
+        mpatches.Patch(color=(0.9, 0.82, 0.0), label=f'Internal cracks ({crack_info["n_internal"]})'),
+        Line2D([0], [0], color=(0.0, 0.78, 1.0), ls='--', lw=2,
+               label='Edge row' if edge_end > 0 else 'Edge row not found'),
     ]
     ax_seg.legend(handles=leg, loc='lower right', fontsize=23,
                   facecolor='white', labelcolor='black',
@@ -865,35 +923,53 @@ def fig_original_vs_segmentation(img_gray, overlay, crater_details, crack_info,
 
     # ── Build text content ─────────────────────────────────────────────────
     ci = crack_info
-    gd = CRATER_GRADES.get(max_grade, (0, 0, ''))[2]
     n_c = len(crater_details)
-    max_crater_um   = max((d['diam_um']  for d in crater_details), default=0)
-    max_crater_area = max((d['area_um2'] for d in crater_details), default=0)
-
-    txt_craters = (
-        f"CRATERS\n"
-        f"Scale: {um_per_px:.4f} µm/px\n"
-        f"Count: {n_c}  |  Grade: {max_grade}\n"
-        f"{gd}\n"
-        f"Largest diam.: {max_crater_um:.1f} µm\n"
-        f"Largest area: {max_crater_area:.1f} µm²"
-    )
-    txt_cracks = (
-        f"CRACKS\n"
-        f"Total: {ci['n_total']} "
-        f"(edge: {ci['n_large']}, int: {ci['n_small']})\n"
-        f"Total length: {ci['total_length_um']:.1f} µm\n"
-        f"Longest: {ci['max_single_crack_um']:.1f} µm\n"
-        f"Large: {ci['large_crack_class']}  |  Small: {ci['small_crack_class']}\n"
-        f"Regular: {ci['regular_crack_class_desc']}"
-        + (f" (CV={ci['regular_cv']:.3f})" if ci.get('regular_cv') is not None else "")
-    )
+    um = scale['um_per_px']
+    cv_txt = (f"{ci['regular_cv']:.3f} ({ci['n_for_regularity']} near edge cracks)"
+              if ci.get('regular_cv') is not None else
+              f"not evaluated ({ci['n_for_regularity']} near edge cracks, 3 needed)")
+    if um is not None:
+        tot_area = sum(d['area_um2'] for d in crater_details)
+        big_area = max((d['area_um2'] for d in crater_details), default=0.0)
+        big_diam = max((d['diam_um'] for d in crater_details), default=0.0)
+        txt_craters = (
+            f"CRATER LIKE REGIONS\n"
+            f"Pixel size: {um:.4f} µm/px ({scale['source']})\n"
+            f"Regions: {n_c}  |  total area: {tot_area:.0f} µm²\n"
+            f"Largest: {big_area:.0f} µm², eq. diam. {big_diam:.1f} µm\n"
+            f"Size category: {SIZE_CATEGORIES[size_cat]}\n"
+            f"(size class only, not a severity grade)"
+        )
+        txt_cracks = (
+            f"CRACKS\n"
+            f"Total: {ci['n_total']} (edge {ci['n_edge_connected']}, near {ci['n_near_edge']}, "
+            f"int. {ci['n_internal']})\n"
+            f"Total length: {ci['total_length_um']:.1f} µm\n"
+            f"Longest: {ci['longest_um']:.1f} µm\n"
+            f"Spacing CV: {cv_txt}"
+        )
+    else:
+        tot_area = sum(d['area_px'] for d in crater_details)
+        txt_craters = (
+            f"CRATER LIKE REGIONS\n"
+            f"PIXEL SIZE NOT VERIFIED:\n{scale['reason']}\n"
+            f"Physical outputs withheld\n"
+            f"Regions: {n_c}  |  total area: {tot_area} px"
+        )
+        txt_cracks = (
+            f"CRACKS\n"
+            f"Total: {ci['n_total']} (edge {ci['n_edge_connected']}, near {ci['n_near_edge']}, "
+            f"int. {ci['n_internal']})\n"
+            f"Total length: {ci['total_length_px']:.1f} px\n"
+            f"Longest: {ci['longest_px']:.1f} px\n"
+            f"Spacing CV: {cv_txt}"
+        )
 
     ax_info.text(0.25, 0.52, txt_craters, transform=ax_info.transAxes,
-                 ha='center', va='center', fontsize=28,
+                 ha='center', va='center', fontsize=22,
                  color='black', fontfamily='monospace', linespacing=1.75)
     ax_info.text(0.75, 0.52, txt_cracks, transform=ax_info.transAxes,
-                 ha='center', va='center', fontsize=28,
+                 ha='center', va='center', fontsize=22,
                  color='black', fontfamily='monospace', linespacing=1.75)
 
     plt.savefig(str(out_path), dpi=150, bbox_inches='tight', pad_inches=0.2,
@@ -902,8 +978,15 @@ def fig_original_vs_segmentation(img_gray, overlay, crater_details, crack_info,
 
 
 def fig_gt_comparison(img_gray, gt_crater, gt_crack, pred_crater, pred_crack_skel,
-                       iou_c, iou_k, out_path, gt_crack_thin=None):
-    """Publication-ready figure: GT masks vs Prediction."""
+                       scores, out_path, gt_crack_thin=None):
+    """Manual annotation vs prediction.
+
+    Craters are scored by the strict IoU of the masks.  Cracks are scored by the
+    length-weighted centreline F1 within 5 px (revision 1); the first version printed
+    here a "crack IoU" between the 15-px annotation band and the predicted skeleton
+    dilated by 4 px, which is not the protocol of the paper.
+    """
+    iou_c, f1_k = scores['crater_iou'], scores['crack_centreline_f1_5px']
     plt.rcParams.update({'font.family': 'serif', 'font.size': 17})
 
     fig, axes = plt.subplots(2, 2, figsize=(18, 14))
@@ -919,37 +1002,41 @@ def fig_gt_comparison(img_gray, gt_crater, gt_crack, pred_crater, pred_crack_ske
             ax.set_xticks([]); ax.set_yticks([])
 
     stem = out_path.stem.replace('_gt_comparison', '')
+    fmt = lambda v: 'n/a' if v is None or v != v else f'{v:.3f}'   # noqa: E731
     fig.suptitle(
-        f'{stem}\nCrater IoU: {iou_c:.3f}   |   Crack IoU: {iou_k:.3f}',
-        color='black', fontsize=34, fontweight='bold', y=0.99)
+        f'{stem}\nCrater IoU (strict): {fmt(iou_c)}   |   '
+        f'Crack centreline F1 (5 px): {fmt(f1_k)}',
+        color='black', fontsize=30, fontweight='bold', y=0.99)
 
-    # GT Craters
+    # Annotated crater like regions
     gt_vis = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2RGB)
     gt_vis[gt_crater > 0] = [255, 140, 0]
     axes[0, 0].imshow(gt_vis)
-    axes[0, 0].set_title('Ground Truth — Craters', color='#CC5500', fontsize=30, fontweight='bold')
+    axes[0, 0].set_title('Manual annotation: crater like regions', color='#CC5500',
+                         fontsize=26, fontweight='bold')
 
-    # Pred Craters
+    # Predicted crater like regions
     pred_vis = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2RGB)
     pred_vis[pred_crater] = [255, 140, 0]
     axes[0, 1].imshow(pred_vis)
-    axes[0, 1].set_title(f'U-Net Prediction — Craters\n(IoU: {iou_c:.3f})',
-                         color='#CC5500', fontsize=30, fontweight='bold')
+    axes[0, 1].set_title(f'Prediction: crater like regions\n(IoU, strict: {fmt(iou_c)})',
+                         color='#CC5500', fontsize=26, fontweight='bold')
 
-    # GT Cracks — use thin linestrip mask when available (no branching artifacts)
+    # Annotated crack centrelines (thin polylines when available)
     gt_vis_k = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2RGB)
     gt_crack_display = gt_crack_thin if gt_crack_thin is not None else skeletonize(gt_crack.astype(bool))
     gt_vis_k[binary_dilation(gt_crack_display, disk(1))] = [210, 0, 0]
     axes[1, 0].imshow(gt_vis_k)
-    axes[1, 0].set_title('Ground Truth — Cracks', color='#AA0000', fontsize=30, fontweight='bold')
+    axes[1, 0].set_title('Manual annotation: crack centrelines', color='#AA0000',
+                         fontsize=26, fontweight='bold')
 
-    # Pred Cracks (skeleton)
+    # Predicted crack centrelines
     pred_vis_k = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2RGB)
     skel_dilated = binary_dilation(pred_crack_skel, disk(1))
     pred_vis_k[skel_dilated] = [210, 0, 0]
     axes[1, 1].imshow(pred_vis_k)
-    axes[1, 1].set_title(f'U-Net Prediction — Cracks\n(IoU: {iou_k:.3f})',
-                         color='#AA0000', fontsize=30, fontweight='bold')
+    axes[1, 1].set_title(f'Prediction: crack centrelines\n(centreline F1 within 5 px: {fmt(f1_k)})',
+                         color='#AA0000', fontsize=26, fontweight='bold')
 
     plt.tight_layout(rect=[0, 0, 1, 0.87])
     plt.savefig(str(out_path), dpi=150, bbox_inches='tight', pad_inches=0.15,
@@ -961,76 +1048,122 @@ def fig_gt_comparison(img_gray, gt_crater, gt_crack, pred_crater, pred_crack_ske
 #  MAIN ANALYSIS PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
+def resolve_scale(gray_full, user_um_per_px=None):
+    """Pixel size of an image and its provenance.
+
+    Order: the value given by the user (source 'user'), otherwise the data bar when the
+    printed magnification and field width agree within 1 % (source 'data bar').  When
+    neither is available `um_per_px` is None and every physical output is withheld.
+    """
+    if user_um_per_px is not None:
+        return {'um_per_px': float(user_um_per_px), 'verified': False, 'source': 'user',
+                'magnification': None, 'width_um': None,
+                'reason': 'pixel size given by the user (--scale)'}
+    res = read_scale(gray_full)
+    if res['um_per_px'] is None:
+        res['source'] = None
+    return res
+
+
+def analysis_rows(gray_full, strip_fraction=STRIP_FRACTION):
+    """Rows analysed: the training crop (frame without its bottom `strip_fraction` of
+    rows), further limited to the rows above the data bar."""
+    H = gray_full.shape[0]
+    roi_h = H - int(H * strip_fraction)
+    bar_top = MS.locate_data_bar(gray_full)
+    return roi_h, min(roi_h, bar_top), bar_top
+
+
+def _strict_iou(ref, pred):
+    ref, pred = ref.astype(bool), pred.astype(bool)
+    union = (ref | pred).sum()
+    return float((ref & pred).sum() / union) if union else float('nan')
+
+
 def analyze_image(predictor, img_path, output_dir, gt_json_path=None,
-                  strip_fraction=0.08):
+                  strip_fraction=STRIP_FRACTION, user_um_per_px=None):
     img_path = Path(img_path)
+    output_dir = Path(output_dir)
     stem = img_path.stem
     print(f"\n  {'='*60}\n  {stem}\n  {'='*60}")
-    
+
     # 1. Load image
     img_bgr = cv2.imread(str(img_path))
     if img_bgr is None:
         raise ValueError(f"Cannot read: {img_path}")
     img_gray_full = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     H_full, W_full = img_gray_full.shape
-    
-    # 2. Detect and strip metadata bar
-    meta_h = detect_meta_strip(img_gray_full)
-    img_gray = img_gray_full[:H_full - meta_h, :]
+
+    # 2. Region of interest: training crop, then rows above the data bar
+    roi_h, valid_h, bar_top = analysis_rows(img_gray_full, strip_fraction)
+    roi_net = img_gray_full[:roi_h, :]
+    img_gray = img_gray_full[:valid_h, :]
     H, W = img_gray.shape
-    print(f"  Image: {W_full}x{H_full} px | Metadata strip: {meta_h} px | ROI: {W}x{H} px")
-    
-    # 3. Auto-scale
-    um_per_px = auto_scale(img_gray_full, meta_h)
+    print(f"  Image: {W_full}x{H_full} px | network input: rows 0-{roi_h} "
+          f"| analysed rows: 0-{valid_h} (data bar from row {bar_top})")
+
+    # 3. Pixel size (verified, given by the user, or withheld)
+    scale = resolve_scale(img_gray_full, user_um_per_px)
+    um_per_px = scale['um_per_px']
+    flags = []
     if um_per_px is None:
-        um_per_px = 0.224
-        print(f"  [Scale] Auto-detection failed. Using default: {um_per_px} µm/px (500X)")
-    print(f"  Scale: {um_per_px:.4f} µm/px ({W * um_per_px:.0f} x {H * um_per_px:.0f} µm)")
-    
-    # 4. Detect zones
-    edge_end, artifact_start = compute_zones_dynamic(img_gray)
-    print(f"  Edge zone: 0–{edge_end} px | Interior: {edge_end}–{artifact_start} px")
-    
-    # 5. U-Net prediction
+        flags.append('scale not verified: physical outputs withheld')
+        print(f"  [Scale] NOT VERIFIED ({scale['reason']}). Physical outputs withheld; "
+              f"give the pixel size with --scale to obtain them.")
+    else:
+        print(f"  Scale: {um_per_px:.4f} µm/px [{scale['source']}] "
+              f"({W * um_per_px:.0f} x {H * um_per_px:.0f} µm analysed)")
+
+    # 4. Edge row
+    edge_end, artifact_start = compute_zones_dynamic(img_gray, bottom_pct=0.02)
+    if edge_end == 0:
+        flags.append('edge row not found: every crack is labelled internal or near edge')
+    print(f"  Edge row: {edge_end} px" if edge_end else "  Edge row: not found")
+
+    # 5. U-Net prediction on the training crop, restricted to the analysed rows
     print(f"\n  [U-Net] Running inference (TTA)...")
-    crater_mask, crack_mask, crater_prob, crack_prob = predictor.predict(img_gray)
-    
-    # 6. Post-processing
-    print(f"  [Post] Analyzing craters...")
-    crater_details, max_grade, crater_labels = analyze_craters(
+    crater_mask, crack_mask, _, _ = predictor.predict(roi_net)
+    crater_mask, crack_mask = crater_mask[:valid_h], crack_mask[:valid_h]
+
+    # 6. Analysis stage
+    crater_details, size_cat, crater_labels = analyze_craters(
         crater_mask, img_gray, um_per_px, edge_end, artifact_start)
-    
-    print(f"  [Post] Skeletonizing cracks...")
-    crack_info, crack_skel, crack_labels = analyze_cracks(
-        crack_mask, um_per_px, edge_end)
-    
+    kept = (np.isin(crater_labels, [d['label'] for d in crater_details])
+            if crater_details else np.zeros_like(crater_mask, dtype=bool))
+    crack_info, crack_skel, crack_labels = analyze_cracks(crack_mask, um_per_px, edge_end)
+
     # 7. Print results
     ci = crack_info
-    gd = CRATER_GRADES.get(max_grade, (0, 0, ''))[2]
-    print(f"\n  ── CRATERS ──")
-    print(f"    Count: {len(crater_details)}  |  Max grade: {max_grade} — {gd}")
-    if crater_details:
-        max_d = max(crater_details, key=lambda x: x['diam_um'])
-        print(f"    Largest: {max_d['diam_um']:.1f} µm diameter, {max_d['area_um2']:.1f} µm² area")
+    print(f"\n  ── CRATER LIKE REGIONS ──")
+    print(f"    Count: {len(crater_details)}")
+    if um_per_px is not None:
+        if crater_details:
+            big = max(crater_details, key=lambda x: x['area_um2'])
+            print(f"    Total area: {sum(d['area_um2'] for d in crater_details):.1f} µm² | "
+                  f"largest: {big['area_um2']:.1f} µm², eq. diameter {big['diam_um']:.1f} µm")
+        print(f"    Size category of the largest region: {SIZE_CATEGORIES[size_cat]} "
+              f"(size class only, not a severity grade)")
     print(f"\n  ── CRACKS ──")
-    print(f"    Total: {ci['n_total']} (edge: {ci['n_large']}, internal: {ci['n_small']})")
-    print(f"    Total length: {ci['total_length_um']:.1f} µm | Longest: {ci['max_single_crack_um']:.1f} µm")
-    print(f"    Large class: {ci['large_crack_class']} ({ci['large_crack_class_desc']})")
-    print(f"    Small class: {ci['small_crack_class']} ({ci['small_crack_class_desc']})")
-    print(f"    Regular: {ci['regular_crack_class_desc']}")
-    
-    # 8. Generate segmentation figure
-    overlay = build_segmentation_overlay(img_gray, crater_mask, crack_skel,
-                                          crater_details, edge_end)
+    print(f"    Total: {ci['n_total']} (edge connected {ci['n_edge_connected']}, "
+          f"near edge {ci['n_near_edge']}, internal {ci['n_internal']})")
+    if um_per_px is not None:
+        print(f"    Total length: {ci['total_length_um']:.1f} µm | Longest: {ci['longest_um']:.1f} µm")
+    else:
+        print(f"    Total length: {ci['total_length_px']:.1f} px | Longest: {ci['longest_px']:.1f} px")
+    print(f"    Spacing CV: {ci['regular_cv'] if ci['regular_cv'] is not None else 'not evaluated'}"
+          f" ({ci['n_for_regularity']} edge connected or near edge cracks)")
+
+    # 8. Segmentation figure
+    overlay = build_segmentation_overlay(img_gray, kept, crack_labels, crack_info, edge_end,
+                                         crater_details)
     seg_path = output_dir / f"{stem}_segmentation.png"
     fig_original_vs_segmentation(img_gray, overlay, crater_details, crack_info,
-                                  max_grade, um_per_px, edge_end, seg_path)
+                                 size_cat, scale, edge_end, seg_path)
     print(f"\n  -> {seg_path.name}")
-    
-    # 9. GT comparison (if available)
+
+    # 9. Comparison with a manual annotation (if available)
     gt_metrics = {}
     if gt_json_path is None:
-        # Auto-search for GT JSON
         for search_dir in [img_path.parent.parent / 'masks',
                            img_path.parent.parent / 'data' / 'masks',
                            img_path.parent]:
@@ -1038,51 +1171,71 @@ def analyze_image(predictor, img_path, output_dir, gt_json_path=None,
             if candidate.exists():
                 gt_json_path = candidate
                 break
-    
+
     if gt_json_path and Path(gt_json_path).exists():
         gt_crater, gt_crack = load_gt_masks(gt_json_path, H, W, H_full, W_full)
         gt_crack_thin = load_gt_crack_thin(gt_json_path, H, W, H_full, W_full)
-        iou_c = compute_iou(gt_crater, crater_mask)
-        iou_k = compute_iou(gt_crack, binary_dilation(crack_skel, disk(4)))
-        gt_metrics = {'crater_iou': round(iou_c, 4), 'crack_iou': round(iou_k, 4)}
-
+        cl = MS.centreline_scores(gt_crack_thin, crack_mask, tau=5.0)
+        gt_metrics = {
+            'crater_iou': round(_strict_iou(gt_crater, crater_mask), 4),
+            'crack_centreline_precision_5px': round(cl['precision'], 4),
+            'crack_centreline_recall_5px': round(cl['recall'], 4),
+            'crack_centreline_f1_5px': round(cl['f1'], 4),
+            'note': 'raw masks of the deployed pipeline, analysed rows only; '
+                    'crater IoU strict, crack scores length weighted within 5 px',
+        }
         gt_path = output_dir / f"{stem}_gt_comparison.png"
         fig_gt_comparison(img_gray, gt_crater, gt_crack, crater_mask, crack_skel,
-                           iou_c, iou_k, gt_path, gt_crack_thin=gt_crack_thin)
-        print(f"  -> {gt_path.name}  (Crater IoU: {iou_c:.3f}, Crack IoU: {iou_k:.3f})")
-    
-    # 10. Save JSON report
+                          gt_metrics, gt_path, gt_crack_thin=gt_crack_thin)
+        print(f"  -> {gt_path.name}  (crater IoU {gt_metrics['crater_iou']:.3f}, "
+              f"crack centreline F1 {gt_metrics['crack_centreline_f1_5px']:.3f})")
+
+    # 10. JSON report
+    scaled = um_per_px is not None
+    crack_summary = {k: v for k, v in crack_info.items() if k != 'individual_cracks'}
     report = {
         'file': img_path.name,
+        'software': 'tungsten_analyzer.inference, revision 1',
         'dimensions': {'width_px': W_full, 'height_px': H_full},
+        'flags': flags,
         'scale': {
             'um_per_px': um_per_px,
-            'field_of_view_um': f"{W * um_per_px:.1f} x {H * um_per_px:.1f}",
+            'source': scale['source'],
+            'verified': scale['verified'],
+            'magnification_read': scale['magnification'],
+            'field_width_um_read': scale['width_um'],
+            'status': scale['reason'],
+            'analysed_field_um': f"{W * um_per_px:.1f} x {H * um_per_px:.1f}" if scaled else None,
         },
-        'zones': {
-            'edge_end_px': edge_end,
-            'artifact_start_px': artifact_start,
+        'rows': {
+            'network_input_rows': roi_h,
+            'data_bar_top_row': bar_top,
+            'analysed_rows': valid_h,
         },
+        'edge_row_px': edge_end if edge_end > 0 else None,
         'craters': {
             'count': len(crater_details),
-            'max_grade': max_grade,
-            'max_grade_desc': gd,
-            'max_diameter_um': round(max((d['diam_um'] for d in crater_details), default=0), 1),
-            'max_area_um2': round(max((d['area_um2'] for d in crater_details), default=0), 1),
-            'total_area_um2': round(sum(d['area_um2'] for d in crater_details), 1),
-            'details': [{k: v for k, v in d.items() if k != 'centroid' and k != 'bbox'}
+            'total_area_um2': round(sum(d['area_um2'] for d in crater_details), 1) if scaled else None,
+            'largest_area_um2': round(max((d['area_um2'] for d in crater_details), default=0.0), 1) if scaled else None,
+            'largest_diameter_um': round(max((d['diam_um'] for d in crater_details), default=0.0), 1) if scaled else None,
+            'total_area_px': int(sum(d['area_px'] for d in crater_details)),
+            'size_category': size_cat,
+            'size_category_label': SIZE_CATEGORIES[size_cat] if size_cat is not None else None,
+            'size_category_note': 'size class of the largest region only, '
+                                  'not calibrated against any physical endpoint',
+            'details': [{k: v for k, v in d.items() if k not in ('centroid', 'bbox')}
                         for d in crater_details],
         },
-        'cracks': {k: v for k, v in crack_info.items() if k != 'individual_cracks'},
+        'cracks': crack_summary,
         'crack_details': crack_info['individual_cracks'],
         'gt_comparison': gt_metrics if gt_metrics else None,
     }
-    
+
     report_path = output_dir / f"{stem}_report.json"
     with open(report_path, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False, default=str)
     print(f"  -> {report_path.name}")
-    
+
     return report
 
 
@@ -1090,87 +1243,108 @@ def analyze_image(predictor, img_path, output_dir, gt_json_path=None,
 #  CLI & BATCH
 # ─────────────────────────────────────────────────────────────────────────────
 
+SUMMARY_FIELDS = [
+    'file', 'flags', 'scale_um_px', 'scale_source', 'scale_status', 'edge_row_px',
+    'analysed_rows', 'n_crater_regions', 'crater_total_area_um2', 'crater_largest_area_um2',
+    'crater_largest_diam_um', 'size_category', 'size_category_label',
+    'n_cracks', 'n_edge_connected', 'n_near_edge', 'n_internal',
+    'crack_total_length_um', 'crack_longest_um', 'crack_total_length_px',
+    'regular_cv', 'n_cracks_for_cv',
+    'gt_crater_iou', 'gt_crack_centreline_f1_5px', 'error',
+]
+
+
+def summary_row(report):
+    sc, cr, ck = report['scale'], report['craters'], report['cracks']
+    gt = report.get('gt_comparison') or {}
+    return {
+        'file': report['file'],
+        'flags': '; '.join(report['flags']),
+        'scale_um_px': sc['um_per_px'],
+        'scale_source': sc['source'],
+        'scale_status': sc['status'],
+        'edge_row_px': report['edge_row_px'],
+        'analysed_rows': report['rows']['analysed_rows'],
+        'n_crater_regions': cr['count'],
+        'crater_total_area_um2': cr['total_area_um2'],
+        'crater_largest_area_um2': cr['largest_area_um2'],
+        'crater_largest_diam_um': cr['largest_diameter_um'],
+        'size_category': cr['size_category'],
+        'size_category_label': cr['size_category_label'],
+        'n_cracks': ck['n_total'],
+        'n_edge_connected': ck['n_edge_connected'],
+        'n_near_edge': ck['n_near_edge'],
+        'n_internal': ck['n_internal'],
+        'crack_total_length_um': ck['total_length_um'],
+        'crack_longest_um': ck['longest_um'],
+        'crack_total_length_px': ck['total_length_px'],
+        'regular_cv': ck['regular_cv'],
+        'n_cracks_for_cv': ck['n_for_regularity'],
+        'gt_crater_iou': gt.get('crater_iou', ''),
+        'gt_crack_centreline_f1_5px': gt.get('crack_centreline_f1_5px', ''),
+    }
+
+
 def main():
     p = argparse.ArgumentParser(description='U-Net Full Inference Pipeline for Tungsten SEM')
     p.add_argument('--input', default=None, help='Image path or directory (with --batch)')
     p.add_argument('--checkpoint', default='checkpoints/best_model.pth')
     p.add_argument('--output-dir', default='./inference_results')
-    p.add_argument('--gt', default=None, help='Path to GT JSON (optional)')
+    p.add_argument('--gt', default=None, help='Path to the annotation JSON (optional)')
     p.add_argument('--batch', action='store_true', help='Process all images in directory')
-    p.add_argument('--strip-fraction', type=float, default=0.08)
+    p.add_argument('--strip-fraction', type=float, default=STRIP_FRACTION,
+                   help='Bottom fraction of rows removed, as in training (default 0.08)')
+    p.add_argument('--scale', type=float, default=None,
+                   help='Pixel size in µm/px.  Overrides the data bar and is recorded in '
+                        'the report with source "user".  Without it, the physical outputs '
+                        'of an image whose data bar cannot be verified are withheld.')
     args = p.parse_args()
-    
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"\n  {'═'*60}")
-    print(f"  TUNGSTEN SEM ANALYZER — U-Net Inference Pipeline")
+    print(f"  TUNGSTEN SEM ANALYZER — U-Net Inference Pipeline (revision 1)")
     print(f"  {'═'*60}")
-    
+
     # Load model
     predictor = UNetPredictor(args.checkpoint)
-    
+
     # Interactive mode if no input
     if args.input is None:
         args.input = input("\n  Enter image path or folder:\n  > ").strip('"\'')
-    
+
     input_path = Path(args.input)
     EXTS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp'}
-    
+
     if args.batch or input_path.is_dir():
         imgs = sorted([p for p in input_path.iterdir() if p.suffix.lower() in EXTS])
         print(f"\n  Batch mode: {len(imgs)} images found")
-        
+
         rows = []
         for img_path in imgs:
             try:
                 report = analyze_image(predictor, img_path, output_dir,
-                                        strip_fraction=args.strip_fraction)
-                rows.append({
-                    'file': report['file'],
-                    'scale_um_px': report['scale']['um_per_px'],
-                    'n_craters': report['craters']['count'],
-                    'max_crater_grade': report['craters']['max_grade'],
-                    'max_crater_diam_um': report['craters']['max_diameter_um'],
-                    'max_crater_area_um2': report['craters']['max_area_um2'],
-                    'total_crater_area_um2': report['craters']['total_area_um2'],
-                    'n_cracks': report['cracks']['n_total'],
-                    'n_large_cracks': report['cracks']['n_large'],
-                    'n_small_cracks': report['cracks']['n_small'],
-                    'total_crack_length_um': report['cracks']['total_length_um'],
-                    'max_crack_length_um': report['cracks']['max_single_crack_um'],
-                    'large_crack_class': report['cracks']['large_crack_class'],
-                    'small_crack_class': report['cracks']['small_crack_class'],
-                    'regular_crack_class': report['cracks']['regular_crack_class'],
-                    'regular_cv': report['cracks'].get('regular_cv', ''),
-                    'crater_iou': report.get('gt_comparison', {}).get('crater_iou', ''),
-                    'crack_iou': report.get('gt_comparison', {}).get('crack_iou', ''),
-                })
+                                       strip_fraction=args.strip_fraction,
+                                       user_um_per_px=args.scale)
+                rows.append(summary_row(report))
             except Exception as e:
                 print(f"  ERROR: {img_path.name}: {e}")
                 rows.append({'file': img_path.name, 'error': str(e)})
 
         # Save CSV summary
         if rows:
-            fieldnames = [
-                'file', 'scale_um_px',
-                'n_craters', 'max_crater_grade', 'max_crater_diam_um',
-                'max_crater_area_um2', 'total_crater_area_um2',
-                'n_cracks', 'n_large_cracks', 'n_small_cracks',
-                'total_crack_length_um', 'max_crack_length_um',
-                'large_crack_class', 'small_crack_class', 'regular_crack_class', 'regular_cv',
-                'crater_iou', 'crack_iou', 'error',
-            ]
             csv_path = output_dir / 'summary.csv'
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-                w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+                w = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS, extrasaction='ignore')
                 w.writeheader()
                 w.writerows(rows)
-            print(f"\n  >>> Summary CSV: {csv_path}")
+            n_flag = sum(1 for r in rows if r.get('flags') or r.get('error'))
+            print(f"\n  >>> Summary CSV: {csv_path}  ({n_flag} of {len(rows)} images flagged)")
     else:
         analyze_image(predictor, input_path, output_dir, gt_json_path=args.gt,
-                       strip_fraction=args.strip_fraction)
-    
+                      strip_fraction=args.strip_fraction, user_um_per_px=args.scale)
+
     print(f"\n  {'═'*60}")
     print(f"  All results saved to: {output_dir}/")
     print(f"  {'═'*60}\n")

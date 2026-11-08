@@ -1,4 +1,12 @@
-"""Recompute the crack regularity classification of Section 8.7.
+"""Recompute the crack regularity classification of Section 8.7 of the first version.
+
+REVISION 1 NOTE.  The regularity trends of Section 8.7 of the first version are
+withdrawn in the revised manuscript.  Evaluated out of fold against the class obtained
+from the reference centrelines, the regularity class proved the least reliable output
+of the workflow (Section 4.3 of the revised manuscript), and the interpretation in
+terms of fatigue given below is not established for these single and few pulse
+exposures (Section 5.2 of the revised manuscript).  The script is kept so that the
+first version can be reproduced.
 
 A crack network counts as spatially regular when at least three cracks reaching the
 surface are spaced with a coefficient of variation below 0.45. The idea behind the

@@ -1,6 +1,7 @@
 # Desktop application
 
-The graphical application described in Appendix B of the paper is not part of this
+The graphical application described in Appendix B of the first version of the paper
+(Section S10 of the supplementary material of the revised version) is not part of this
 first release of the repository, and the reason is worth stating plainly rather than
 leaving it implicit.
 

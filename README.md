@@ -11,6 +11,47 @@ dataset and the trained weights.
 
 ---
 
+## Revision 1 of the manuscript (November 2026)
+
+The branch `revision1` accompanies the revised manuscript (ANUCENE-D-26-01513, R1).
+The deployed segmentation pipeline (global pass, tiled pass, ridge enhancement,
+hysteresis and gap bridging) is unchanged, so that the tool is the one evaluated in
+the paper. What changed is the measurement stage and the way results are reported:
+
+* **Pixel size.** The scale is accepted only when the magnification and the field
+  width printed in the data bar agree within 1 % (`measurement.read_scale`), and
+  decimal magnifications are read with their unit (`1.50 kX` used to be read as 1x).
+  There is no default pixel size any more: when the scale cannot be verified every
+  physical output is withheld and the image is flagged, unless the pixel size is
+  given with `--scale`, which is recorded in the report with source `user`.  On the
+  212 images of the two campaigns the reader returns the verified pixel size for all
+  of them.
+* **Region of interest.** Inference uses the crop of training (the frame without its
+  bottom 8 % of rows) instead of a separate data-bar detector, and the analysis is
+  restricted to the rows above the data bar.
+* **Crack length.** Cracks are the components of a pruned centreline, measured with
+  the Kulpa weights (`measurement.analyze_cracks`).  The skeleton pixel count of the
+  first version depended on the width of the mask and is kept only as
+  `inference.analyze_cracks_submitted`.
+* **Labels.** Cracks are reported as edge connected, near edge or internal.  The
+  "severity grades" of the first version are now neutral size categories of the
+  largest crater like region, which are size classes only and are not calibrated
+  against depth, material loss or any other endpoint.
+* **Reports.** Every JSON report and the batch CSV carry the pixel size with its
+  source and status, the edge row found by the scanner (also drawn on the figure) and
+  any flags.  The comparison with a manual annotation reports the strict crater IoU
+  and the length-weighted crack centreline precision, recall and F1 within 5 px,
+  instead of the "crack IoU" of the first version.
+* **Documentation.** The docstring of `_bridge_crack_gaps` now states that every
+  pixel added by the closings is accepted.  `scripts/reproduce_table1.py` reproduces
+  the superseded Table 1 of the first version, with its thresholds made explicit.
+
+The protocol described in "A note on the evaluation protocol" below is that of the
+first version and is superseded by the out-of-fold evaluation of the revised
+manuscript.
+
+---
+
 ## What the tool does
 
 Tungsten plasma-facing components exposed to disruption-like thermal loads develop
@@ -21,10 +62,11 @@ two operators do not produce comparable numbers.
 
 The tool segments both morphologies and converts them into physical quantities in
 micrometres, with the scale read automatically from the metadata bar of the
-micrograph. For each image it reports the number of craters, their equivalent
-diameters and total damaged area, a five-level severity grade, the number and total
-length of cracks, whether each crack reaches the material edge, and a regularity
-metric derived from the coefficient of variation of the inter-crack spacing.
+micrograph. For each image it reports the number of crater like regions, their
+equivalent diameters and total projected area, the size category of the largest one,
+the number and total length of cracks, whether each crack reaches the material edge,
+and a regularity metric derived from the coefficient of variation of the inter-crack
+spacing.
 
 It is a measurement layer, not a damage model. It does not attempt any
 thermomechanical evaluation, any reconstruction of the surface temperature or any
@@ -49,7 +91,8 @@ The work proceeded in three stages, and the code still follows that shape.
 | `tungsten_analyzer/metrics.py` | The evaluation protocol. Every reported number comes from here. |
 | `tungsten_analyzer/validation_figures.py` | Per-image comparison figures against the annotation. |
 
-The desktop application described in Appendix B of the paper is not part of this
+The desktop application described in Appendix B of the first version of the paper
+(Section S10 of the supplementary material of the revised version) is not part of this
 release; `app/README.md` explains why and what reaches the same result from the
 command line.
 
@@ -113,7 +156,7 @@ python scripts/plot_convergence.py
 python -m tungsten_analyzer.validation_figures --checkpoint checkpoints/best_model.pth \
     --data-dir ./data --num-images 0
 
-# Crack regularity statistics of Section 8.7
+# Crack regularity statistics of Section 8.7 of the first version (withdrawn in revision 1)
 python scripts/crack_regularity.py --dir ./inference_results
 ```
 
@@ -127,7 +170,7 @@ figure and table each command produces.
 python scripts/pre_annotate.py --images ./data/images --output ./data/masks
 
 # 2. train
-python -m tungsten_analyzer.train --data-dir ./data --epochs 160 --batch-size 2
+python -m tungsten_analyzer.train --data-dir ./data --epochs 180 --batch-size 4
 
 # 3. run the full inference workflow over a directory
 python -m tungsten_analyzer.inference --input ./data/images --output ./inference_results
@@ -143,6 +186,9 @@ python -m tungsten_analyzer.genetic_search --dataset ./annotation_subset --trial
 ---
 
 ## A note on the evaluation protocol
+
+*(First version, superseded in revision 1: the score described here is the "legacy
+score" of the revised manuscript, which is not an IoU.)*
 
 The comparison between the two methods is easy to get wrong, so it is worth being
 explicit about what `metrics.py` does.

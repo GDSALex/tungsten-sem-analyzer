@@ -13,6 +13,20 @@ Usage:
   python unet_validate_visual.py --checkpoint checkpoints/best_model.pth
   python unet_validate_visual.py --data-dir ./data --num-images 10
   python unet_validate_visual.py --output-dir ./validation_results
+
+REVISION 1 NOTE.  This module drew Figures 5-7 and 15 of the first version of the
+manuscript.  None of the figures or numbers of the revised manuscript comes from it:
+they are produced by the evaluation code of the revision, out of fold.  Two of its
+reporting choices did not match the protocol of the paper and are corrected here:
+  * the crack score it displayed as "IoU (tol.)" is the legacy score of the first
+    version (Section S5.1 of the supplementary material of the revised manuscript),
+    which is not an IoU, and the F1
+    shown next to it was strict, so the two did not share counts.  The figures now
+    show the strict IoU and F1, computed from the same counts, and the legacy score
+    separately, labelled as such;
+  * its summaries excluded the images with a zero score.  They now keep every image
+    whose reference contains the class, failures included as zeros, as Table 1 of the
+    first version and every table of the revision do.
 =============================================================================
 """
 
@@ -215,17 +229,17 @@ def compute_f1(gt, pred):
 
 def compute_crack_iou_tolerant(gt, pred, tolerance_px=5):
     """
-    Compute tolerance-based IoU for thin crack structures.
-    
-    Standard IoU penalizes even perfectly-localized cracks if there's a
-    width mismatch between GT (thin line) and prediction (thicker area).
-    
-    This metric dilates BOTH GT and prediction by `tolerance_px` before
-    computing IoU, which is the standard approach in crack/road/vessel
-    segmentation (centerline-tolerance evaluation).
-    
-    Additionally computes centerline recall: what fraction of the GT
-    skeleton falls within `tolerance_px` of any predicted pixel.
+    Legacy crack score of the first version of the manuscript (not an IoU).
+
+    With D the dilation by a disk of radius `tolerance_px`, it returns
+    T / (T + FP + FN), where T averages two counts of matched pixels taken in
+    different masks, (|D(gt) & pred| + |D(pred) & gt|) / 2, FP = |pred \\ D(gt)| and
+    FN = |gt \\ D(pred)|.  This is not the IoU of the two dilated masks, and it
+    can reach 1 for masks that do not coincide (two 15 px bands shifted by 2 px
+    score 1.000, against a strict IoU of 0.765).  It is kept only to reproduce
+    the figures of the first version; the revised manuscript scores cracks with
+    the strict band IoU and the centreline precision, recall and F1.
+    Both masks empty returns 1.0, one of them empty returns 0.0.
     """
     from skimage.morphology import binary_dilation, disk
     
@@ -341,7 +355,8 @@ def visualize_one(model, img_path, json_path, device, output_dir,
     axes[1, 2].set_title('Crack Probability Map', color='#222222', fontsize=36, fontweight='bold')
 
     axes[1, 3].imshow(err_crack)
-    axes[1, 3].set_title(f'Detection Errors — Cracks\nIoU: {iou_k:.3f} (tol.)  |  F1: {f1_k:.3f}',
+    axes[1, 3].set_title(f'Detection Errors — Cracks\nstrict IoU: {iou_k_strict:.3f}  |  F1: {f1_k:.3f}'
+                         f'  |  legacy score: {iou_k:.3f}',
                          color='#222222', fontsize=33, fontweight='bold')
 
     leg_patches = [
@@ -368,8 +383,8 @@ def visualize_one(model, img_path, json_path, device, output_dir,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _filtered_mean(values, mask):
-    """Mean excluding images with no GT for that class (mask=False) OR metric=0."""
-    v = [val for val, m in zip(values, mask) if m and val > 0]
+    """Mean over the images with GT for that class (mask=True), failures kept as zeros."""
+    v = [val for val, m in zip(values, mask) if m]
     return float(np.mean(v)) if v else float('nan')
 
 
@@ -397,8 +412,8 @@ def plot_summary(results, output_dir):
     """Distribution histograms of IoU and F1 — large format for scientific paper."""
     plt.rcParams.update({'font.family': 'serif', 'font.size': 34})
 
-    def _vals(key, flag):
-        return [r[key] for r in results if r[flag] and r[key] > 0]
+    def _vals(key, flag):              # failures kept as zeros (revision 1)
+        return [r[key] for r in results if r[flag]]
 
     iou_c = _vals('iou_crater', 'has_crater')
     iou_k = _vals('iou_crack',  'has_crack')
@@ -429,8 +444,8 @@ def plot_summary(results, output_dir):
 
     _hist_panel(ax_ic, iou_c, '#E8870A', 'Crater — IoU',        mi_c, med_c_i, std_c_i, n_ci)
     _hist_panel(ax_fc, f1_c,  '#F0A830', 'Crater — F1 (Dice)',  mf_c, med_c_f, std_c_f, n_cf)
-    _hist_panel(ax_ik, iou_k, '#CC2222', 'Crack — IoU (tol. 5 px)', mi_k, med_k_i, std_k_i, n_ki)
-    _hist_panel(ax_fk, f1_k,  '#E06060', 'Crack — F1 (Dice)',   mf_k, med_k_f, std_k_f, n_kf)
+    _hist_panel(ax_ik, iou_k, '#CC2222', 'Crack — legacy score (not an IoU)', mi_k, med_k_i, std_k_i, n_ki)
+    _hist_panel(ax_fk, f1_k,  '#E06060', 'Crack — strict F1 (Dice)', mf_k, med_k_f, std_k_f, n_kf)
 
     plt.tight_layout()
     out = output_dir / 'validation_summary.png'
@@ -528,28 +543,29 @@ def main():
               + ('' if has_k else ' [no crack GT]')
               + f'  -> {out_path.name}')
 
-    # Filtered means (exclude images where that class has no GT annotation)
+    # Means over the images whose annotation contains the class, failures kept
+    # as zeros (revision 1; the first version also dropped the zero scores here)
     def fmean(key, flag):
-        vals = [r[key] for r in results if r[flag] and r[key] > 0]
+        vals = [r[key] for r in results if r[flag]]
         return float(np.mean(vals)) if vals else float('nan')
 
     mi_c = fmean('iou_crater', 'has_crater')
     mi_k = fmean('iou_crack',  'has_crack')
     mf_c = fmean('f1_crater',  'has_crater')
     mf_k = fmean('f1_crack',   'has_crack')
-    n_c  = sum(r['has_crater'] and r['iou_crater'] > 0 for r in results)
-    n_k  = sum(r['has_crack']  and r['iou_crack']  > 0 for r in results)
+    n_c  = sum(bool(r['has_crater']) for r in results)
+    n_k  = sum(bool(r['has_crack']) for r in results)
 
     print(f'\n  ══════════════════════════════════════════════════════')
     print(f'  VALIDATION SUMMARY  ({len(results)} images total)')
-    print(f'  (means computed only over images that contain each class)')
+    print(f'  (means over images that contain each class, failures included)')
     print(f'  ──────────────────────────────────────────────────────')
     print(f'  Craters  ({n_c} images with GT):')
     print(f'    Mean IoU : {mi_c:.4f}')
     print(f'    Mean F1  : {mf_c:.4f}')
     print(f'  Cracks   ({n_k} images with GT):')
-    print(f'    Mean IoU : {mi_k:.4f}')
-    print(f'    Mean F1  : {mf_k:.4f}')
+    print(f'    Mean legacy score (not an IoU) : {mi_k:.4f}')
+    print(f'    Mean strict F1                 : {mf_k:.4f}')
     print(f'  ══════════════════════════════════════════════════════\n')
 
     # Summary chart
