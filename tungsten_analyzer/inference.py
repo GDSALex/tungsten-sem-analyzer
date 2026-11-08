@@ -101,13 +101,13 @@ def detect_meta_strip(gray):
 
 
 def _configure_tesseract():
-    """Use the default Windows install path when tesseract is not on the PATH."""
+    """Point pytesseract at the Tesseract binary (`measurement.locate_tesseract`: the
+    TESSERACT_CMD environment variable, then the PATH, then the default Windows path)."""
     try:
-        import shutil
         import pytesseract
-        default = Path(r'C:\Program Files\Tesseract-OCR\tesseract.exe')
-        if shutil.which('tesseract') is None and default.exists():
-            pytesseract.pytesseract.tesseract_cmd = str(default)
+        cmd = MS.locate_tesseract()
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
     except ImportError:
         pass
 

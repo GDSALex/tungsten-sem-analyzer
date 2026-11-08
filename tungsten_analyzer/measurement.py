@@ -129,6 +129,19 @@ def _ocr_variants(bar: np.ndarray):
     yield up4[:, up4.shape[1] // 2:], "--psm 6"
 
 
+def locate_tesseract() -> str | None:
+    """The Tesseract binary: the TESSERACT_CMD environment variable first, then the PATH,
+    then the default Windows install location; None when none is found, in which case
+    pytesseract keeps its own default."""
+    import os
+    import shutil
+    cmd = os.environ.get("TESSERACT_CMD") or shutil.which("tesseract")
+    if cmd:
+        return cmd
+    default = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    return default if os.path.isfile(default) else None
+
+
 def read_scale(gray_full: np.ndarray, bar_top: int | None = None) -> dict:
     """Pixel size from the data bar, accepted only when the magnification and the field
     width read agree within 1 %.
@@ -146,12 +159,10 @@ def read_scale(gray_full: np.ndarray, bar_top: int | None = None) -> dict:
         out["reason"] = "data bar not found"
         return out
     try:
-        import shutil
-        from pathlib import Path
         import pytesseract
-        default = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
-        if shutil.which("tesseract") is None and default.exists():   # Windows default install
-            pytesseract.pytesseract.tesseract_cmd = str(default)
+        cmd = locate_tesseract()
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
     except ImportError:
         out["reason"] = "pytesseract not available"
         return out

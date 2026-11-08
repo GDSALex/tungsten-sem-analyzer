@@ -18,7 +18,8 @@ dataset and the trained weights.
 
 ## Revision 1 of the manuscript (November 2026)
 
-The branch `revision1` accompanies the revised manuscript (ANUCENE-D-26-01513, R1).
+This version of the code accompanies the revised manuscript (ANUCENE-D-26-01513,
+revision 1).
 The deployed segmentation pipeline (global pass, tiled pass, ridge enhancement,
 hysteresis and gap bridging) is unchanged, so that the tool is the one evaluated in
 the paper. What changed is the measurement stage and the way results are reported:
