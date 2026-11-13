@@ -33,3 +33,6 @@ Thumbs.db
 
 # Notebooks
 .ipynb_checkpoints/
+
+# Evaluation outputs and local data
+evaluation/work/

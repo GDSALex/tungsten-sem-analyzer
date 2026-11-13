@@ -7,7 +7,7 @@ version, which is not an IoU.  With the default thresholds (0.5 / 0.30) the scri
 returns the printed values; the text of the first version stated a crack threshold of
 0.25 (use --thr-crack 0.25).  The out-of-fold evaluation of the revised manuscript
 (edge-grouped cross-validation, strict crater IoU and length-weighted crack
-centreline scores) is produced by the evaluation code archived with the revision.
+centreline scores) is produced by the evaluation code in the `evaluation/` folder.
 
 The script runs both methods over the annotated dataset, scores them with the single
 protocol of :mod:`tungsten_analyzer.metrics`, and prints the medians and means for

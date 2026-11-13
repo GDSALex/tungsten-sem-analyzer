@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tungsten-sem-analyzer"
-version = "1.0.0"
+version = "1.1.0"
 description = "Automated quantification of high heat flux damage in tungsten SEM micrographs"
 readme = "README.md"
 requires-python = ">=3.9"

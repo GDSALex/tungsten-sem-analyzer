@@ -152,6 +152,9 @@ and when evaluating, so the two never disagree.
 
 ## Reproducing the paper
 
+The code that computes the numbers, tables and figures of the revised manuscript from the
+per-image records is in [`evaluation/`](evaluation/README.md).
+
 ```bash
 # Table 1, both methods, one evaluation protocol
 python scripts/reproduce_table1.py --data-dir ./data --checkpoint checkpoints/best_model.pth

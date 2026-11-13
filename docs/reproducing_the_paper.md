@@ -16,7 +16,7 @@ epoch 125, selected on the 14 held-out images, and the commands below reproduce 
 version. The revised manuscript (revision 1) does not use this checkpoint for any of
 its results: it reports out-of-fold results of networks retrained inside
 cross-validation grouped by exposed sample edge, computed by the evaluation code
-archived with the revision. Its Section S7.1 explains how the Table 1 of the first
+in the `evaluation/` folder of this repository (see its README). Its Section S7.1 explains how the Table 1 of the first
 version relates to the revised figures. The train and held-out subsets are recovered by replaying the
 split of the training run, a plain random shuffle of the sorted file names under seed
 42 with the first fifteen per cent held out. Change that seed and the subsets stop
